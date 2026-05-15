@@ -143,9 +143,29 @@ export default function Compiler() {
 
     const startPolling = (repoName, githubUsername, buildId, projectName, aiTool, startTime) => {
         buildContextRef.current = { repoName, githubUsername, buildId, projectName, aiTool, startTime };
+        let attempts = 0;
+        const MAX_ATTEMPTS = 112; // ~15 min (112 × 8s)
+
         pollRef.current = setInterval(async () => {
+            attempts++;
             const ctx = buildContextRef.current;
             if (!ctx) { stopPolling(); return; }
+
+            // Timeout de segurança — evita loop infinito
+            if (attempts > MAX_ATTEMPTS) {
+                stopPolling();
+                setIsProcessing(false);
+                setBuildStatus('failed');
+                setBuildLogs(prev => [...prev, `❌ Timeout: build demorou mais de 15 minutos. Cancele e tente novamente.`]);
+                base44.entities.BuildHistory.update(buildId, {
+                    status: 'failed',
+                    error_message: 'Timeout no frontend: build ultrapassou 15 minutos'
+                }).catch(() => {});
+                base44.functions.invoke('sendBuildNotification', { build_id: buildId }).catch(() => {});
+                queryClient.invalidateQueries(['builds']);
+                return;
+            }
+
             try {
                 const response = await base44.functions.invoke('pollToolBuild', {
                     repo: ctx.repoName,
@@ -157,8 +177,12 @@ export default function Compiler() {
                 const data = response.data;
 
                 if (data.status === 'pending' || data.status === 'running') {
-                    setBuildLogs(prev => [...prev, `⏳ Build em andamento...`]);
-                    setProgress(prev => Math.min(prev + 3, 90));
+                    // Mostrar log apenas a cada 5 tentativas para não poluir
+                    if (attempts % 5 === 1) {
+                        const elapsed = Math.round((Date.now() - ctx.startTime) / 1000);
+                        setBuildLogs(prev => [...prev, `⏳ Build em andamento... (${elapsed}s)`]);
+                    }
+                    setProgress(prev => Math.min(prev + 1, 88));
                     return;
                 }
 
@@ -167,13 +191,12 @@ export default function Compiler() {
                 setIsProcessing(false);
                 const duration = Math.round((Date.now() - ctx.startTime) / 1000);
 
-                if (data.status === 'completed' && data.success && data.compiled_file_url) {
+                if (data.status === 'completed' && (data.success || data.compiled_file_url)) {
                     setBuildLogs(prev => [...prev, `✅ Compilação concluída em ${duration}s!`]);
                     setProgress(100);
                     setBuildStatus('completed');
-                    setCompiledUrl(data.compiled_file_url);
+                    setCompiledUrl(data.compiled_file_url || data.compiled_url);
                     setBuildSteps({ upload: 'completed', validation: 'completed', install: 'completed', build: 'completed', optimize: 'completed' });
-                    // Notificação disparada APÓS banco já atualizado pelo pollToolBuild
                     base44.functions.invoke('sendBuildNotification', { build_id: ctx.buildId }).catch(() => {});
                 } else {
                     const errMsg = data.error || 'Erro desconhecido no build';
@@ -185,7 +208,6 @@ export default function Compiler() {
                         if (running) s[running[0]] = 'failed';
                         return s;
                     });
-                    // Notificação disparada APÓS banco já atualizado pelo pollToolBuild
                     base44.functions.invoke('sendBuildNotification', { build_id: ctx.buildId }).catch(() => {});
                 }
                 queryClient.invalidateQueries(['builds']);
@@ -428,48 +450,37 @@ export default function Compiler() {
     };
 
     const handleDownload = async () => {
-        if (compiledUrl) {
-            try {
-                const urlParts = compiledUrl.split('/');
-                const suggestedFileName = decodeURIComponent(urlParts[urlParts.length - 1]) || 'compiled-project.zip';
-
-                const response = await base44.functions.invoke('downloadCompiledFile', {
-                    fileUrl: compiledUrl,
-                    fileName: suggestedFileName
-                });
-
-                // A função retorna base64 para evitar corrupção binária via Axios
-                const { base64, fileName: respFileName } = response.data;
-                const binaryStr = atob(base64);
-                const bytes = new Uint8Array(binaryStr.length);
-                for (let i = 0; i < binaryStr.length; i++) {
-                    bytes[i] = binaryStr.charCodeAt(i);
-                }
-                const blob = new Blob([bytes], { type: 'application/zip' });
-                const downloadUrl = window.URL.createObjectURL(blob);
+        if (!compiledUrl && !currentBuildId) return;
+        try {
+            // Obtém signed URL via edge function (acesso seguro ao bucket privado)
+            const response = await base44.functions.invoke('downloadCompiledFile', {
+                build_id: currentBuildId
+            });
+            const { signed_url, project_name: pName } = response.data;
+            const downloadHref = signed_url || compiledUrl;
+            if (downloadHref) {
                 const a = document.createElement('a');
-                a.href = downloadUrl;
-                a.download = respFileName || suggestedFileName;
+                a.href = downloadHref;
+                a.download = pName ? `${pName}.zip` : 'compiled-project.zip';
+                a.target = '_blank';
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
-                window.URL.revokeObjectURL(downloadUrl);
-            } catch (error) {
-                console.error('Erro ao baixar arquivo:', error);
-                // Fallback: abrir URL diretamente
-                window.open(compiledUrl, '_blank');
             }
-
-            setSelectedFile(null);
-            setBuildStatus(null);
-            setProgress(0);
-            setCompiledUrl(null);
-            setCurrentBuildId(null);
-            setBuildSteps({});
-            setBuildLogs([]);
-            setIsProcessing(false);
-            setUploadReset(r => r + 1);
+        } catch (error) {
+            console.error('Erro ao baixar arquivo:', error);
+            if (compiledUrl) window.open(compiledUrl, '_blank');
         }
+
+        setSelectedFile(null);
+        setBuildStatus(null);
+        setProgress(0);
+        setCompiledUrl(null);
+        setCurrentBuildId(null);
+        setBuildSteps({});
+        setBuildLogs([]);
+        setIsProcessing(false);
+        setUploadReset(r => r + 1);
     };
 
     if (isAuthChecking) {

@@ -29,20 +29,25 @@ on: [push]
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
       - name: Setup project
         run: bash setup.sh
       - name: Install deps
-        run: npm install --legacy-peer-deps
-      - name: Apply Base44 mock (post-install)
+        timeout-minutes: 10
+        run: pnpm install --no-frozen-lockfile
+      - name: Apply mock (post-install)
         run: node setup-base44-mock.cjs
       - name: Build
-        run: CI=false NODE_ENV=production npm run build
+        timeout-minutes: 5
+        run: CI=false NODE_ENV=production pnpm run build
       - name: Inject form interceptor
         run: node setup-form-interceptor.cjs
       - name: Verify dist
@@ -92,8 +97,26 @@ node setup-env.cjs
 function makeSetupPkg() {
   return `#!/usr/bin/env node
 const fs = require('fs');
+const path = require('path');
+// Scan all source files for dependency detection
 let src = '';
-try { src = fs.readFileSync('src/App.jsx','utf8'); } catch { try { src = fs.readFileSync('src/App.tsx','utf8'); } catch {} }
+function scanDir(dir) {
+  try {
+    fs.readdirSync(dir).forEach(f => {
+      const fp = path.join(dir, f);
+      try {
+        if (fs.statSync(fp).isDirectory()) {
+          if (!['node_modules','.git','dist','build','.next'].includes(f)) scanDir(fp);
+        } else if (/\\.(jsx?|tsx?)$/.test(f)) {
+          src += '\\n' + fs.readFileSync(fp, 'utf8');
+        }
+      } catch {}
+    });
+  } catch {}
+}
+scanDir('src');
+scanDir('app');
+scanDir('pages');
 const deps = {
   'react': '^18.3.1',
   'react-dom': '^18.3.1',
@@ -114,11 +137,21 @@ if (src.includes('sonner')) deps['sonner'] = '^1.7.0';
 if (src.includes('date-fns')) deps['date-fns'] = '^4.1.0';
 if (src.includes('clsx')) deps['clsx'] = '^2.1.1';
 if (src.includes('tailwind-merge')) deps['tailwind-merge'] = '^2.5.4';
-const usesTailwind = src.includes('className=') || src.includes('@/');
-const usesRadix = src.includes('@radix-ui') || src.includes('@/');
-if (usesRadix) {
-  const radixPkgs = ['accordion','alert-dialog','aspect-ratio','avatar','checkbox','collapsible','context-menu','dialog','dropdown-menu','hover-card','label','menubar','navigation-menu','popover','progress','radio-group','scroll-area','select','separator','slider','slot','switch','tabs','toast','toggle','toggle-group','tooltip'];
-  radixPkgs.forEach(p => { deps[\`@radix-ui/react-\${p}\`] = '^1.0.0'; });
+const usesTailwind = src.includes('className=') || src.includes('@/') || src.includes('tailwind');
+// Selective Radix: only install packages actually imported in source
+const allRadix = ['accordion','alert-dialog','aspect-ratio','avatar','checkbox','collapsible','context-menu','dialog','dropdown-menu','hover-card','label','menubar','navigation-menu','popover','progress','radio-group','scroll-area','select','separator','slider','slot','switch','tabs','toast','toggle','toggle-group','tooltip'];
+let radixInstalled = 0;
+allRadix.forEach(p => {
+  if (src.includes(\`@radix-ui/react-\${p}\`)) {
+    deps[\`@radix-ui/react-\${p}\`] = '^1.0.0';
+    radixInstalled++;
+  }
+});
+// If no direct @radix-ui imports but uses shadcn/ui aliases, install common subset
+if (radixInstalled === 0 && src.includes('@/components/ui')) {
+  ['dialog','dropdown-menu','label','select','separator','tabs','toast','tooltip','slot','popover','avatar','checkbox','progress'].forEach(p => {
+    deps[\`@radix-ui/react-\${p}\`] = '^1.0.0';
+  });
 }
 if (usesTailwind) {
   deps['class-variance-authority'] = '^0.7.0';
@@ -130,7 +163,7 @@ if (usesTailwind) {
 const pkg = { name:'react-to-html-build', version:'1.0.0', private:true, type:'module', scripts:{ build:'vite build', dev:'vite' }, dependencies:deps, devDependencies:devDeps };
 if (!fs.existsSync('package.json')) {
   fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
-  console.log('Generated package.json');
+  console.log('Generated package.json with', Object.keys(deps).length, 'deps');
 } else {
   console.log('package.json exists, merging deps');
   const existing = JSON.parse(fs.readFileSync('package.json','utf8'));

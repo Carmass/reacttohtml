@@ -92,10 +92,18 @@ Deno.serve(async (req: Request) => {
           .from('builds')
           .upload(fileName, zipBytes, { contentType: 'application/zip', upsert: true });
 
+        // Use signed URL (7 days) since builds bucket is private
         let compiledUrl = '';
         if (!uploadErr) {
-          const { data } = supabase.storage.from('builds').getPublicUrl(fileName);
-          compiledUrl = data.publicUrl;
+          const { data: signedData } = await supabase.storage
+            .from('builds')
+            .createSignedUrl(fileName, 7 * 24 * 3600);
+          compiledUrl = signedData?.signedUrl ?? '';
+          // Fallback: store public path so download-compiled-file edge function can reconstruct
+          if (!compiledUrl) {
+            const { data: pub } = supabase.storage.from('builds').getPublicUrl(fileName);
+            compiledUrl = pub.publicUrl;
+          }
         }
 
         // Update build record
@@ -110,14 +118,17 @@ Deno.serve(async (req: Request) => {
         await deleteRepo(github_username, repo);
 
         // Send notification
+        const { data: bh } = await supabase.from('build_history').select('user_id').eq('id', build_id).single();
         await supabase.from('notifications').insert({
-          user_id: (await supabase.from('build_history').select('user_id').eq('id', build_id).single()).data?.user_id,
+          user_id: bh?.user_id,
           title: 'Build concluído! ✅',
           message: `${project_name} foi compilado com sucesso.`,
           icon: '✅',
+          type: 'build',
+          status: 'success',
         }).catch(() => {});
 
-        return Response.json({ status: 'completed', compiled_url: compiledUrl }, { headers: { 'Access-Control-Allow-Origin': '*' } });
+        return Response.json({ status: 'completed', success: true, compiled_file_url: compiledUrl, compiled_url: compiledUrl }, { headers: { 'Access-Control-Allow-Origin': '*' } });
       } else {
         // Failure — get logs
         let errorMessage = `Workflow failed: ${run.conclusion}`;
@@ -149,6 +160,8 @@ Deno.serve(async (req: Request) => {
 
     return Response.json({ status: 'running' }, { headers: { 'Access-Control-Allow-Origin': '*' } });
   } catch (e) {
+    console.error('poll-tool-build error:', String(e));
+    // Return running for transient errors so frontend retries; frontend has its own timeout
     return Response.json({ status: 'running', error: String(e) }, { headers: { 'Access-Control-Allow-Origin': '*' } });
   }
 });
