@@ -51,11 +51,15 @@ export default function Compiler() {
 
     useEffect(() => {
         const checkAuth = async () => {
-            const isAuthenticated = await base44.auth.isAuthenticated();
-            if (!isAuthenticated) {
+            try {
+                const isAuthenticated = await base44.auth.isAuthenticated();
+                if (!isAuthenticated) {
+                    base44.auth.redirectToLogin(createPageUrl('Compiler'));
+                } else {
+                    setIsAuthChecking(false);
+                }
+            } catch {
                 base44.auth.redirectToLogin(createPageUrl('Compiler'));
-            } else {
-                setIsAuthChecking(false);
             }
         };
         checkAuth();

@@ -33,9 +33,9 @@ export default function Landing() {
                 const isAuth = await base44.auth.isAuthenticated();
                 setIsLoggedIn(isAuth);
                 
-                // Se logado, redireciona ao Dashboard
+                // Se logado, redireciona ao Compiler
                 if (isAuth) {
-                    window.location.href = createPageUrl('Dashboard');
+                    window.location.href = createPageUrl('Compiler');
                 }
             } catch {
                 setIsLoggedIn(false);

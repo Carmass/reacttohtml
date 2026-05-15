@@ -42,8 +42,12 @@ const auth = {
   },
 
   async isAuthenticated() {
-    const { data: { session } } = await supabase.auth.getSession();
-    return !!session;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      return !!session;
+    } catch {
+      return false;
+    }
   },
 
   redirectToLogin(returnUrl) {
