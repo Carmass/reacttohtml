@@ -14,7 +14,7 @@ import {
 import {
     User, LogOut, Settings, Crown, CreditCard, HelpCircle,
     Zap, DollarSign, ShieldCheck, BookOpen, BarChart3,
-    FolderOpen, Gift, Code2,
+    FolderOpen, Gift, Code2, Star,
 } from 'lucide-react';
 import NotificationCenter from './NotificationCenter';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -151,6 +151,12 @@ export default function UserMenu({ user }) {
                                 <Link to={createPageUrl('AdminTestimonials')} className="cursor-pointer">
                                     <User className="w-4 h-4 mr-2" />
                                     Testemunhos
+                                </Link>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem asChild>
+                                <Link to={createPageUrl('SubmitTestimonial')} className="cursor-pointer">
+                                    <Star className="w-4 h-4 mr-2" />
+                                    Enviar Testemunho
                                 </Link>
                             </DropdownMenuItem>
                             <DropdownMenuItem asChild>
