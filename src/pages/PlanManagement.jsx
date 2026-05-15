@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { base44 } from '@/api/client';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -23,7 +23,7 @@ export default function PlanManagement() {
     const { data: plans = [] } = useQuery({
         queryKey: ['plans'],
         queryFn: async () => {
-            return await base44.entities.Plan.filter({ active: true }, 'price');
+            return await base44.entities.Plan.filter({ is_active: true }, 'price');
         }
     });
 
@@ -38,19 +38,24 @@ export default function PlanManagement() {
     });
 
     const handleUpgrade = async (plan) => {
+        if (!plan.stripe_price_id) {
+            alert('Este plano não tem preço configurado. Configure o Stripe Price ID no painel admin.');
+            return;
+        }
         setIsLoading(true);
         try {
-            const response = await base44.functions.invoke('createCheckoutSession', {
-                plan_id: plan.id
+            const response = await base44.functions.invoke('stripeCreateCheckout', {
+                price_id: plan.stripe_price_id,
+                plan_name: plan.name,
             });
-
-            if (response.data.checkout_url) {
-                window.location.href = response.data.checkout_url;
+            if (response.data?.url) {
+                window.location.href = response.data.url;
+            } else {
+                alert('Erro ao criar sessão de checkout. Verifique a configuração do Stripe.');
             }
         } catch (error) {
             console.error('Erro:', error);
-            const errorMsg = error.response?.data?.error || error.message || 'Erro ao criar checkout. Tente novamente.';
-            alert(errorMsg);
+            alert(error.message || 'Erro ao criar checkout. Tente novamente.');
         } finally {
             setIsLoading(false);
         }
@@ -74,8 +79,10 @@ export default function PlanManagement() {
         }
     };
 
-    const currentPlanId = user?.current_plan_id;
-    const currentPlan = plans.find(p => p.id === currentPlanId);
+    // Match current plan by name (our DB uses subscription_plan name, not ID)
+    const currentPlanName = user?.subscription_plan || 'Free';
+    const currentPlan = plans.find(p => p.name?.toLowerCase() === currentPlanName?.toLowerCase());
+    const currentPlanId = currentPlan?.id;
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-50 via-violet-50 to-purple-50">

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
-import { base44 } from '@/api/base44Client';
+import { base44 } from '@/api/client';
 import { Button } from '@/components/ui/button';
 import { Check, Zap, Info } from 'lucide-react';
 import { motion } from 'framer-motion';

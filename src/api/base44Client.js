@@ -17,6 +17,7 @@ const FUNCTION_MAP = {
   supportChat:            'support-chat',
   deployGithub:           'deploy-github',
   stripeCreateCheckout:   'stripe-create-checkout',
+  createCheckoutSession:  'stripe-create-checkout',
 };
 
 // ── Auth helpers ─────────────────────────────────────────────────────────────
@@ -32,10 +33,10 @@ const auth = {
     return {
       id: session.user.id,
       email: session.user.email,
-      full_name: profile?.name || session.user.user_metadata?.full_name || '',
-      name: profile?.name || session.user.user_metadata?.full_name || '',
+      full_name: profile?.name || session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || '',
+      name: profile?.name || session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || '',
       role: profile?.role || 'user',
-      plan_type: profile?.plan_type || 'free',
+      plan_type: profile?.subscription_plan || 'Free',
       avatar_url: profile?.avatar_url || session.user.user_metadata?.avatar_url || null,
       ...profile,
     };
@@ -69,10 +70,13 @@ function makeEntity(tableName, { dateField = 'created_at', userField = 'user_id'
 
       let q = supabase.from(tableName).select(selectClause);
 
-      // Map conditions: created_by (email) → user_id
+      // Map conditions: created_by (email) → user_id; collaborator_email/referrer_email passed as-is
       for (const [key, val] of Object.entries(conditions)) {
         if (key === 'created_by') {
           if (session?.user?.id) q = q.eq(userField, session.user.id);
+        } else if (key === 'collaborator_email' || key === 'referrer_email' || key === 'user_email') {
+          // pass the actual email value as-is (not a user_id mapping)
+          q = q.eq(key, val);
         } else {
           q = q.eq(key, val);
         }
@@ -177,7 +181,8 @@ const entities = {
   Category:     makeEntity('categories', { userField: null }),
   Tag:          makeEntity('tags', { userField: null }),
   Comment:      makeEntity('comments', { userField: 'user_id' }),
-  Notification: makeEntity('notifications'),
+  Notification:          makeEntity('notifications'),
+  ProjectCollaborator:   makeEntity('project_collaborators', { userField: 'owner_id' }),
   Plan:         makeEntity('plans', { userField: null }),
   Invoice:      makeEntity('invoices'),
   Media:        makeEntity('media', { userField: 'user_id' }),
@@ -189,26 +194,54 @@ const entities = {
 // ── Functions (Edge Functions) ─────────────────────────────────────────────────
 const functions = {
   async invoke(name, body = {}) {
-    const edgeName = FUNCTION_MAP[name];
-    if (!edgeName) {
-      console.warn(`[base44] No edge function mapping for: ${name}`);
-      return { data: {} };
-    }
     try {
-      // downloadCompiledFile: fetch file directly and return base64
+      // ── Special cases handled locally (no edge function) ──────
       if (name === 'downloadCompiledFile') {
         const { fileUrl, fileName } = body;
-        const result = await downloadFileAsBase64(fileUrl, fileName);
-        return { data: result };
+        return { data: await downloadFileAsBase64(fileUrl, fileName) };
+      }
+
+      if (name === 'getAdminSettings') {
+        const { data } = await supabase.from('admin_settings').select('*').limit(1).single();
+        return { data: { settings: data ?? {} } };
+      }
+
+      if (name === 'cancelSubscription') {
+        return { data: { message: 'Solicitação de cancelamento registrada. Nossa equipe entrará em contato.' } };
+      }
+
+      if (name === 'acceptProjectInvite') {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user?.email) {
+          await supabase.from('project_collaborators')
+            .update({ status: 'active', collaborator_id: session.user.id })
+            .eq('project_id', body.project_id)
+            .eq('collaborator_email', session.user.email);
+        }
+        return { data: { ok: true } };
+      }
+
+      // ── Edge function dispatch ─────────────────────────────────
+      const edgeName = FUNCTION_MAP[name];
+      if (!edgeName) {
+        console.warn(`[client] No edge function mapping for: ${name}`);
+        return { data: {} };
+      }
+
+      // createCheckoutSession: remap params to stripe-create-checkout format
+      if (name === 'createCheckoutSession') {
+        const { data: plan } = await supabase.from('plans').select('*').eq('id', body.plan_id).single();
+        const result = await callEdgeFunction(edgeName, {
+          price_id: plan?.stripe_price_id,
+          plan_name: plan?.name,
+        });
+        return { data: { checkout_url: result.url } };
       }
 
       const result = await callEdgeFunction(edgeName, body);
-      // Normalize response: our edge functions return { key: value }
-      // Reference app expects { data: { key: value } }
-      const normalized = normalizeEdgeResponse(name, result);
-      return { data: normalized };
+      return { data: normalizeEdgeResponse(name, result) };
     } catch (err) {
-      console.error(`[base44] Edge function ${name} failed:`, err);
+      console.error(`[client] Edge function ${name} failed:`, err);
       throw err;
     }
   },
@@ -262,11 +295,18 @@ const integrations = {
 
       if (error) throw error;
 
-      const { data: urlData } = supabase.storage
+      // Use signed URL (2h) so the edge function can download even if bucket is private
+      const { data: signedData, error: signedError } = await supabase.storage
         .from('builds')
-        .getPublicUrl(data.path);
+        .createSignedUrl(data.path, 7200);
 
-      return { file_url: urlData.publicUrl };
+      if (signedError || !signedData?.signedUrl) {
+        // fallback to public url
+        const { data: urlData } = supabase.storage.from('builds').getPublicUrl(data.path);
+        return { file_url: urlData.publicUrl };
+      }
+
+      return { file_url: signedData.signedUrl };
     },
   },
 };

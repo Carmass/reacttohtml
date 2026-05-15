@@ -18,7 +18,7 @@ import ExitIntentPopup from '../components/landing/ExitIntentPopup';
 import CookieBanner from '../components/landing/CookieBanner';
 import { translations } from '../components/landing/translations';
 import { useLanguage } from '../components/common/useLanguage';
-import { base44 } from '@/api/base44Client';
+import { base44 } from '@/api/client';
 
 export default function Landing() {
     const [language, changeLanguage] = useLanguage();

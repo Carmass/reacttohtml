@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import { base44 } from '@/api/client';
 import { Button } from '@/components/ui/button';
 import { Download, Zap, History, AlertCircle, BarChart3, User, LogOut, HelpCircle, Gift, Crown, Settings, CreditCard, FolderOpen, Menu, X, FlaskConical } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';

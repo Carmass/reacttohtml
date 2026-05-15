@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { base44 } from '@/api/client';
 import { Button } from '@/components/ui/button';
 import { Download, RefreshCw, Trash2, Filter, Calendar, CheckCircle, XCircle, Clock, ChevronLeft, ChevronRight, RotateCcw, X, ExternalLink } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
