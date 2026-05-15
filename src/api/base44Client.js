@@ -147,6 +147,11 @@ function makeEntity(tableName, { dateField = 'created_at', userField = 'user_id'
       if (error) throw error;
       return (data || []).map(row => normalizeDates(row));
     },
+
+    // subscribe — stub for real-time events (not implemented, returns no-op unsubscribe)
+    subscribe(_callback) {
+      return () => {};
+    },
   };
 }
 
