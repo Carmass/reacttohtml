@@ -69,6 +69,8 @@ if [ -f project.zip ]; then
       PKG_DIR=$(dirname $(find extracted/ -name "package.json" -maxdepth 3 | head -1))
       cp -r "$PKG_DIR/." .
       echo "Full project extracted"
+      rm -f package-lock.json yarn.lock pnpm-lock.yaml bun.lockb .yarnrc.yml .npmrc
+      echo "Lock files removed for clean install"
     else
       JSX=$(find extracted/ -name "*.jsx" -o -name "*.tsx" | head -1)
       if [ -n "$JSX" ]; then
@@ -220,10 +222,14 @@ function makeSetupBase44Mock(appId: string) {
   return `#!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
-// Remove @base44/sdk from package.json
+// Remove all @base44/* packages from all dependency sections
 try {
   const pkg = JSON.parse(fs.readFileSync('package.json','utf8'));
-  delete (pkg.dependencies||{})['@base44/sdk'];
+  ['dependencies','devDependencies','peerDependencies','optionalDependencies'].forEach(section => {
+    if (pkg[section]) {
+      Object.keys(pkg[section]).filter(k => k.startsWith('@base44/')).forEach(k => delete pkg[section][k]);
+    }
+  });
   fs.writeFileSync('package.json', JSON.stringify(pkg,null,2));
 } catch {}
 // Create mock client
