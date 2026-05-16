@@ -29,25 +29,22 @@ on: [push]
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: oven-sh/setup-bun@v2
         with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+          bun-version: latest
       - name: Setup project
         run: bash setup.sh
       - name: Install deps
-        timeout-minutes: 10
-        run: pnpm install --no-frozen-lockfile
+        timeout-minutes: 5
+        run: bun install
       - name: Apply mock (post-install)
         run: node setup-base44-mock.cjs
       - name: Build
         timeout-minutes: 5
-        run: CI=false NODE_ENV=production pnpm run build
+        run: CI=false NODE_ENV=production bun run build
       - name: Inject form interceptor
         run: node setup-form-interceptor.cjs
       - name: Verify dist
