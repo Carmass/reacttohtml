@@ -5,6 +5,9 @@ const GITHUB_TOKEN = Deno.env.get('GITHUB_TOKEN')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
+// Repo permanente para todos os builds — habilita cache entre builds (actions/cache@v4)
+const BUILDS_REPO = 'react-html-builds';
+
 const gh = (path: string, opts: RequestInit = {}) =>
   fetch(`https://api.github.com${path}`, {
     ...opts,
@@ -39,6 +42,12 @@ jobs:
           bun-version: latest
       - name: Setup project
         run: bash setup.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-v1-\${{ hashFiles('package.json') }}
+          restore-keys: |
+            bun-v1-
       - name: Install deps
         timeout-minutes: 8
         run: bun install --ignore-scripts
@@ -455,6 +464,24 @@ console.log('vite.config patched');
 `;
 }
 
+// Garante que o repo permanente de builds existe; cria se necessário.
+async function ensureBuildsRepo(github_username: string): Promise<void> {
+  const check = await gh(`/repos/${github_username}/${BUILDS_REPO}`);
+  if (check.status === 404) {
+    const createRes = await gh('/user/repos', {
+      method: 'POST',
+      body: JSON.stringify({ name: BUILDS_REPO, private: true, auto_init: true,
+        description: 'Permanent build repo — branches used per build for cache sharing' }),
+    });
+    if (!createRes.ok) {
+      const err = await createRes.json();
+      throw new Error(`Failed to create builds repo: ${err.message}`);
+    }
+    // Aguardar o repo ser inicializado
+    await new Promise(r => setTimeout(r, 4000));
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*' } });
 
@@ -474,16 +501,8 @@ Deno.serve(async (req: Request) => {
     const userRes = await gh('/user');
     const { login: github_username } = await userRes.json();
 
-    // 2. Create temp private repo
-    const repoName = `build-${sanitize(project_name)}-${Date.now()}`;
-    const createRes = await gh('/user/repos', {
-      method: 'POST',
-      body: JSON.stringify({ name: repoName, private: true, auto_init: false }),
-    });
-    if (!createRes.ok) {
-      const err = await createRes.json();
-      throw new Error(err.message ?? 'Failed to create repo');
-    }
+    // 2. Garantir que o repo permanente existe (criado uma vez, reutilizado por todos os builds)
+    await ensureBuildsRepo(github_username);
 
     // 3. Download project file
     const fileRes = await fetch(file_url);
@@ -505,11 +524,11 @@ Deno.serve(async (req: Request) => {
       '.github/workflows/build.yml': makeWorkflow(build_id, SUPABASE_URL, SUPABASE_SERVICE_KEY),
     };
 
-    // 5. Create blobs in parallel
+    // 5. Criar blobs no repo permanente em paralelo
     const blobShas: Record<string, string> = {};
     await Promise.all(
       Object.entries(scripts).map(async ([filePath, content]) => {
-        const res = await gh(`/repos/${github_username}/${repoName}/git/blobs`, {
+        const res = await gh(`/repos/${github_username}/${BUILDS_REPO}/git/blobs`, {
           method: 'POST',
           body: JSON.stringify({ content, encoding: 'utf-8' }),
         });
@@ -519,46 +538,49 @@ Deno.serve(async (req: Request) => {
     );
 
     // project.zip blob
-    const zipBlobRes = await gh(`/repos/${github_username}/${repoName}/git/blobs`, {
+    const zipBlobRes = await gh(`/repos/${github_username}/${BUILDS_REPO}/git/blobs`, {
       method: 'POST',
       body: JSON.stringify({ content: fileB64, encoding: 'base64' }),
     });
     const { sha: zipSha } = await zipBlobRes.json();
     blobShas['project.zip'] = zipSha;
 
-    // 6. Create Git tree
+    // 6. Criar Git tree no repo permanente
     const tree = Object.entries(blobShas).map(([path, sha]) => ({
       path,
       mode: path.endsWith('.sh') ? '100755' : '100644',
       type: 'blob',
       sha,
     }));
-    const treeRes = await gh(`/repos/${github_username}/${repoName}/git/trees`, {
+    const treeRes = await gh(`/repos/${github_username}/${BUILDS_REPO}/git/trees`, {
       method: 'POST',
       body: JSON.stringify({ tree }),
     });
     const { sha: treeSha } = await treeRes.json();
 
-    // 7. Create commit
-    const commitRes = await gh(`/repos/${github_username}/${repoName}/git/commits`, {
+    // 7. Criar commit orphan (sem parent) no repo permanente
+    const commitRes = await gh(`/repos/${github_username}/${BUILDS_REPO}/git/commits`, {
       method: 'POST',
       body: JSON.stringify({ message: `build: ${project_name}`, tree: treeSha }),
     });
     const { sha: commitSha } = await commitRes.json();
 
-    // 8. Create ref (triggers workflow)
-    await gh(`/repos/${github_username}/${repoName}/git/refs`, {
+    // 8. Criar branch único para este build apontando para o commit
+    //    O push do branch dispara o workflow (on: push).
+    //    Branches são isolados → builds paralelos funcionam corretamente.
+    const branchName = `build-${sanitize(project_name)}-${Date.now()}`;
+    await gh(`/repos/${github_username}/${BUILDS_REPO}/git/refs`, {
       method: 'POST',
-      body: JSON.stringify({ ref: 'refs/heads/main', sha: commitSha }),
+      body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: commitSha }),
     });
 
-    // 9. Update build record
+    // 9. Update build record — formato: "owner/BUILDS_REPO:branchName"
     await supabase.from('build_history').update({
-      github_run_id: `${github_username}/${repoName}`,
+      github_run_id: `${github_username}/${BUILDS_REPO}:${branchName}`,
       status: 'processing',
     }).eq('id', build_id);
 
-    return Response.json({ success: true, repo: repoName, github_username }, {
+    return Response.json({ success: true, repo: branchName, github_username }, {
       headers: { 'Access-Control-Allow-Origin': '*' },
     });
   } catch (e) {

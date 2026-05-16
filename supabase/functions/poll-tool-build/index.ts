@@ -5,6 +5,7 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*' };
+const BUILDS_REPO = 'react-html-builds';
 
 const gh = (path: string, opts: RequestInit = {}) =>
   fetch(`https://api.github.com${path}`, {
@@ -17,8 +18,10 @@ const gh = (path: string, opts: RequestInit = {}) =>
     },
   });
 
-async function tryDeleteRepo(owner: string, repo: string) {
-  try { await gh(`/repos/${owner}/${repo}`, { method: 'DELETE' }); } catch (_) {}
+async function tryDeleteBranch(owner: string, branch: string) {
+  try {
+    await gh(`/repos/${owner}/${BUILDS_REPO}/git/refs/heads/${branch}`, { method: 'DELETE' });
+  } catch (_) {}
 }
 
 Deno.serve(async (req: Request) => {
@@ -74,27 +77,31 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // ── Step 2: DB still shows 'processing' — check GitHub for failure signals ──
-    const runsRes = await gh(`/repos/${github_username}/${repo}/actions/runs`);
+    // ── Step 2: DB ainda 'processing' — verificar GitHub apenas para detectar falhas ──
+    // repo = branchName; todos os builds ficam no BUILDS_REPO permanente
+    const runsRes = await gh(
+      `/repos/${github_username}/${BUILDS_REPO}/actions/runs?branch=${encodeURIComponent(repo)}&per_page=5`
+    );
     if (!runsRes.ok) {
-      // GitHub API unavailable — transient, keep polling
+      // GitHub API indisponível — transiente, continuar polling
       return Response.json({ status: 'running' }, { headers: CORS });
     }
 
     const { workflow_runs } = await runsRes.json();
 
     if (!workflow_runs?.length) {
-      // Runner not started yet (queued)
+      // Runner ainda não iniciou (queue)
       return Response.json({ status: 'running' }, { headers: CORS });
     }
 
-    const run = workflow_runs[0];
+    // Filtrar pelo branch exato para suportar builds paralelos
+    const run = workflow_runs.find((r: any) => r.head_branch === repo) ?? workflow_runs[0];
 
     if (run.status === 'in_progress' || run.status === 'queued') {
-      // Get step-level progress for logs
+      // Buscar progresso por step para os logs
       let logs = '';
       try {
-        const jobsRes = await gh(`/repos/${github_username}/${repo}/actions/runs/${run.id}/jobs`);
+        const jobsRes = await gh(`/repos/${github_username}/${BUILDS_REPO}/actions/runs/${run.id}/jobs`);
         if (jobsRes.ok) {
           const { jobs } = await jobsRes.json();
           if (jobs?.[0]?.steps) {
@@ -125,7 +132,7 @@ Deno.serve(async (req: Request) => {
             compiled_file_url: compiledUrl,
             build_steps: { upload: 'done', validate: 'done', install: 'done', build: 'done', optimize: 'done' },
           }).eq('id', build_id);
-          await tryDeleteRepo(github_username, repo);
+          await tryDeleteBranch(github_username, repo);
 
           await supabase.from('notifications').insert({
             user_id: buildRecord?.user_id,
@@ -143,7 +150,7 @@ Deno.serve(async (req: Request) => {
         // File not found in storage — upload step must have failed
         const errMsg = 'Build concluído no GitHub mas upload ao storage falhou';
         await supabase.from('build_history').update({ status: 'failed', error_message: errMsg }).eq('id', build_id);
-        await tryDeleteRepo(github_username, repo);
+        await tryDeleteBranch(github_username, repo);
         return Response.json({ status: 'failed', error: errMsg }, { headers: CORS });
 
       } else {
@@ -166,7 +173,7 @@ Deno.serve(async (req: Request) => {
           status: 'failed',
           error_message: errorMessage,
         }).eq('id', build_id);
-        await tryDeleteRepo(github_username, repo);
+        await tryDeleteBranch(github_username, repo);
 
         await supabase.from('notifications').insert({
           user_id: buildRecord?.user_id,
