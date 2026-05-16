@@ -4,6 +4,8 @@ const GITHUB_TOKEN = Deno.env.get('GITHUB_TOKEN')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
+const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*' };
+
 const gh = (path: string, opts: RequestInit = {}) =>
   fetch(`https://api.github.com${path}`, {
     ...opts,
@@ -15,12 +17,12 @@ const gh = (path: string, opts: RequestInit = {}) =>
     },
   });
 
-async function deleteRepo(owner: string, repo: string) {
-  await gh(`/repos/${owner}/${repo}`, { method: 'DELETE' });
+async function tryDeleteRepo(owner: string, repo: string) {
+  try { await gh(`/repos/${owner}/${repo}`, { method: 'DELETE' }); } catch (_) {}
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') return new Response(null, { headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*' } });
+  if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
@@ -32,22 +34,64 @@ Deno.serve(async (req: Request) => {
   const { build_id, repo, github_username, project_name } = await req.json();
   if (!build_id || !repo || !github_username) return Response.json({ error: 'Missing params' }, { status: 400 });
 
-  const startTime = Date.now();
-
   try {
-    // 1. Get workflow runs
+    // ── Step 1: DB-first check ───────────────────────────────────────────────
+    // GitHub Actions updates the DB directly — so the DB is the source of truth.
+    // This avoids downloading artifacts inside the Edge Function (timeout risk).
+    const { data: buildRecord } = await supabase
+      .from('build_history')
+      .select('status, compiled_file_url, error_message, user_id')
+      .eq('id', build_id)
+      .single();
+
+    if (buildRecord?.status === 'completed') {
+      let compiledUrl = buildRecord.compiled_file_url ?? '';
+
+      // Generate fresh signed URL if missing or expired
+      if (!compiledUrl || !compiledUrl.includes('token=')) {
+        const storagePath = `compiled/${build_id}/output.zip`;
+        const { data: signedData } = await supabase.storage
+          .from('builds')
+          .createSignedUrl(storagePath, 7 * 24 * 3600);
+        if (signedData?.signedUrl) {
+          compiledUrl = signedData.signedUrl;
+          await supabase.from('build_history')
+            .update({ compiled_file_url: compiledUrl })
+            .eq('id', build_id);
+        }
+      }
+
+      return Response.json(
+        { status: 'completed', success: true, compiled_file_url: compiledUrl, compiled_url: compiledUrl },
+        { headers: CORS }
+      );
+    }
+
+    if (buildRecord?.status === 'failed') {
+      return Response.json(
+        { status: 'failed', error: buildRecord.error_message ?? 'Build falhou' },
+        { headers: CORS }
+      );
+    }
+
+    // ── Step 2: DB still shows 'processing' — check GitHub for failure signals ──
     const runsRes = await gh(`/repos/${github_username}/${repo}/actions/runs`);
-    if (!runsRes.ok) return Response.json({ status: 'running' }, { headers: { 'Access-Control-Allow-Origin': '*' } });
+    if (!runsRes.ok) {
+      // GitHub API unavailable — transient, keep polling
+      return Response.json({ status: 'running' }, { headers: CORS });
+    }
+
     const { workflow_runs } = await runsRes.json();
 
-    if (!workflow_runs || workflow_runs.length === 0) {
-      return Response.json({ status: 'running' }, { headers: { 'Access-Control-Allow-Origin': '*' } });
+    if (!workflow_runs?.length) {
+      // Runner not started yet (queued)
+      return Response.json({ status: 'running' }, { headers: CORS });
     }
 
     const run = workflow_runs[0];
 
     if (run.status === 'in_progress' || run.status === 'queued') {
-      // Get logs preview
+      // Get step-level progress for logs
       let logs = '';
       try {
         const jobsRes = await gh(`/repos/${github_username}/${repo}/actions/runs/${run.id}/jobs`);
@@ -61,77 +105,51 @@ Deno.serve(async (req: Request) => {
           }
         }
       } catch (_) {}
-      return Response.json({ status: 'running', logs }, { headers: { 'Access-Control-Allow-Origin': '*' } });
+      return Response.json({ status: 'running', logs }, { headers: CORS });
     }
 
-    // Run completed
     if (run.status === 'completed') {
-      const buildDuration = Math.floor((Date.now() - startTime) / 1000);
-
       if (run.conclusion === 'success') {
-        // List artifacts
-        const artRes = await gh(`/repos/${github_username}/${repo}/actions/runs/${run.id}/artifacts`);
-        const { artifacts } = await artRes.json();
-        const artifact = artifacts?.find((a: any) => a.name === 'build-output');
-
-        if (!artifact) {
-          await supabase.from('build_history').update({ status: 'failed', error_message: 'No artifact found' }).eq('id', build_id);
-          await deleteRepo(github_username, repo);
-          return Response.json({ status: 'failed' }, { headers: { 'Access-Control-Allow-Origin': '*' } });
-        }
-
-        // Download artifact zip
-        const dlRes = await gh(`/repos/${github_username}/${repo}/actions/artifacts/${artifact.id}/zip`, {
-          redirect: 'follow',
-        });
-        const zipBytes = await dlRes.arrayBuffer();
-
-        // Upload to Supabase Storage
-        const fileName = `compiled/${build_id}/${project_name ?? 'output'}.zip`;
-        const { error: uploadErr } = await supabase.storage
+        // GitHub reports success but DB not yet updated — race condition.
+        // The "Mark build completed" step should have updated the DB.
+        // Try to generate signed URL directly from storage as fallback.
+        const storagePath = `compiled/${build_id}/output.zip`;
+        const { data: signedData } = await supabase.storage
           .from('builds')
-          .upload(fileName, zipBytes, { contentType: 'application/zip', upsert: true });
+          .createSignedUrl(storagePath, 7 * 24 * 3600);
 
-        // Use signed URL (7 days) since builds bucket is private
-        let compiledUrl = '';
-        if (!uploadErr) {
-          const { data: signedData } = await supabase.storage
-            .from('builds')
-            .createSignedUrl(fileName, 7 * 24 * 3600);
-          compiledUrl = signedData?.signedUrl ?? '';
-          // Fallback: store public path so download-compiled-file edge function can reconstruct
-          if (!compiledUrl) {
-            const { data: pub } = supabase.storage.from('builds').getPublicUrl(fileName);
-            compiledUrl = pub.publicUrl;
-          }
+        if (signedData?.signedUrl) {
+          const compiledUrl = signedData.signedUrl;
+          await supabase.from('build_history').update({
+            status: 'completed',
+            compiled_file_url: compiledUrl,
+            build_steps: { upload: 'done', validate: 'done', install: 'done', build: 'done', optimize: 'done' },
+          }).eq('id', build_id);
+          await tryDeleteRepo(github_username, repo);
+
+          await supabase.from('notifications').insert({
+            user_id: buildRecord?.user_id,
+            title: 'Build concluído! ✅',
+            message: `${project_name} compilado com sucesso.`,
+            icon: '✅', type: 'build', status: 'success',
+          }).catch(() => {});
+
+          return Response.json(
+            { status: 'completed', success: true, compiled_file_url: compiledUrl, compiled_url: compiledUrl },
+            { headers: CORS }
+          );
         }
 
-        // Update build record
-        await supabase.from('build_history').update({
-          status: 'completed',
-          compiled_file_url: compiledUrl,
-          build_duration: buildDuration,
-          build_steps: { upload: 'done', validate: 'done', install: 'done', build: 'done', optimize: 'done' },
-        }).eq('id', build_id);
+        // File not found in storage — upload step must have failed
+        const errMsg = 'Build concluído no GitHub mas upload ao storage falhou';
+        await supabase.from('build_history').update({ status: 'failed', error_message: errMsg }).eq('id', build_id);
+        await tryDeleteRepo(github_username, repo);
+        return Response.json({ status: 'failed', error: errMsg }, { headers: CORS });
 
-        // Delete temp repo
-        await deleteRepo(github_username, repo);
-
-        // Send notification
-        const { data: bh } = await supabase.from('build_history').select('user_id').eq('id', build_id).single();
-        await supabase.from('notifications').insert({
-          user_id: bh?.user_id,
-          title: 'Build concluído! ✅',
-          message: `${project_name} foi compilado com sucesso.`,
-          icon: '✅',
-          type: 'build',
-          status: 'success',
-        }).catch(() => {});
-
-        return Response.json({ status: 'completed', success: true, compiled_file_url: compiledUrl, compiled_url: compiledUrl }, { headers: { 'Access-Control-Allow-Origin': '*' } });
       } else {
-        // Failure — get logs
-        let errorMessage = `Workflow failed: ${run.conclusion}`;
+        // Workflow failed — "Mark build failed" step should have updated DB already.
+        // Get detailed error for the notification.
+        let errorMessage = `Build falhou: ${run.conclusion}`;
         try {
           const jobsRes = await gh(`/repos/${github_username}/${repo}/actions/runs/${run.id}/jobs`);
           if (jobsRes.ok) {
@@ -139,29 +157,34 @@ Deno.serve(async (req: Request) => {
             const failed = jobs?.find((j: any) => j.conclusion === 'failure');
             if (failed?.steps) {
               const failStep = failed.steps.find((s: any) => s.conclusion === 'failure');
-              if (failStep) errorMessage = `Falha em: ${failStep.name}`;
+              if (failStep) errorMessage = `Falha na etapa: ${failStep.name}`;
             }
           }
         } catch (_) {}
 
-        await supabase.from('build_history').update({ status: 'failed', error_message: errorMessage, build_duration: buildDuration }).eq('id', build_id);
-        await deleteRepo(github_username, repo);
+        await supabase.from('build_history').update({
+          status: 'failed',
+          error_message: errorMessage,
+        }).eq('id', build_id);
+        await tryDeleteRepo(github_username, repo);
 
         await supabase.from('notifications').insert({
-          user_id: (await supabase.from('build_history').select('user_id').eq('id', build_id).single()).data?.user_id,
+          user_id: buildRecord?.user_id,
           title: 'Falha no build ❌',
           message: `${project_name}: ${errorMessage}`,
           icon: '❌',
         }).catch(() => {});
 
-        return Response.json({ status: 'failed', error: errorMessage }, { headers: { 'Access-Control-Allow-Origin': '*' } });
+        return Response.json({ status: 'failed', error: errorMessage }, { headers: CORS });
       }
     }
 
-    return Response.json({ status: 'running' }, { headers: { 'Access-Control-Allow-Origin': '*' } });
+    // Unknown run status — keep polling
+    return Response.json({ status: 'running' }, { headers: CORS });
+
   } catch (e) {
     console.error('poll-tool-build error:', String(e));
-    // Return running for transient errors so frontend retries; frontend has its own timeout
-    return Response.json({ status: 'running', error: String(e) }, { headers: { 'Access-Control-Allow-Origin': '*' } });
+    // Return running only for transient errors — the frontend has its own 15-min timeout
+    return Response.json({ status: 'running' }, { headers: CORS });
   }
 });

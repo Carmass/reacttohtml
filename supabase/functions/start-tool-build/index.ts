@@ -21,9 +21,11 @@ function sanitize(name: string) {
   return name.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase().slice(0, 40);
 }
 
-// ── Build scripts (inline, same as original documentation) ──────
+// ── Build scripts ────────────────────────────────────────────────────────────
 
-function makeWorkflow() {
+// GitHub Actions uploads artifact directly to Supabase Storage and updates DB.
+// poll-tool-build only needs to check the database — no artifact download needed.
+function makeWorkflow(buildId: string, supabaseUrl: string, supabaseKey: string) {
   return `name: Build React to HTML
 on: [push]
 jobs:
@@ -38,8 +40,8 @@ jobs:
       - name: Setup project
         run: bash setup.sh
       - name: Install deps
-        timeout-minutes: 5
-        run: bun install
+        timeout-minutes: 8
+        run: bun install --ignore-scripts
       - name: Apply mock (post-install)
         run: node setup-base44-mock.cjs
       - name: Build
@@ -47,13 +49,40 @@ jobs:
         run: CI=false NODE_ENV=production bun run build
       - name: Inject form interceptor
         run: node setup-form-interceptor.cjs
-      - name: Verify dist
+      - name: Verify build
         run: test -f dist/index.html || (echo "Build failed: no index.html" && exit 1)
-      - uses: actions/upload-artifact@v4
-        with:
-          name: build-output
-          path: dist/
-          retention-days: 3
+      - name: Upload to Supabase Storage
+        run: |
+          cd dist && zip -r ../build-output.zip . && cd ..
+          HTTP=$(curl -s -o /tmp/up.json -w "%{http_code}" \\
+            -X POST "${supabaseUrl}/storage/v1/object/builds/compiled/${buildId}/output.zip" \\
+            -H "Authorization: Bearer ${supabaseKey}" \\
+            -H "Content-Type: application/zip" \\
+            --data-binary @build-output.zip)
+          echo "Storage upload HTTP: $HTTP"
+          cat /tmp/up.json || true
+          [ "$HTTP" -ge 200 ] && [ "$HTTP" -lt 300 ] || (echo "Upload failed" && exit 1)
+      - name: Mark build completed in DB
+        run: |
+          curl -sf -X PATCH \\
+            "${supabaseUrl}/rest/v1/build_history?id=eq.${buildId}" \\
+            -H "Authorization: Bearer ${supabaseKey}" \\
+            -H "apikey: ${supabaseKey}" \\
+            -H "Content-Type: application/json" \\
+            -H "Prefer: return=minimal" \\
+            -d '{"status":"completed","build_steps":{"upload":"done","validate":"done","install":"done","build":"done","optimize":"done"}}'
+          echo "Build marked as completed"
+      - name: Mark build failed
+        if: failure()
+        run: |
+          curl -s -X PATCH \\
+            "${supabaseUrl}/rest/v1/build_history?id=eq.${buildId}" \\
+            -H "Authorization: Bearer ${supabaseKey}" \\
+            -H "apikey: ${supabaseKey}" \\
+            -H "Content-Type: application/json" \\
+            -H "Prefer: return=minimal" \\
+            -d '{"status":"failed","error_message":"Build falhou no GitHub Actions - verifique os logs"}' || true
+          echo "Build marked as failed"
 `;
 }
 
@@ -69,8 +98,9 @@ if [ -f project.zip ]; then
       PKG_DIR=$(dirname $(find extracted/ -name "package.json" -maxdepth 3 | head -1))
       cp -r "$PKG_DIR/." .
       echo "Full project extracted"
-      rm -f package-lock.json yarn.lock pnpm-lock.yaml bun.lockb .yarnrc.yml .npmrc
-      echo "Lock files removed for clean install"
+      # Remove ALL lock files and registry config to force clean install
+      rm -f package-lock.json yarn.lock pnpm-lock.yaml bun.lockb bun.lock .yarnrc .yarnrc.yml .npmrc .bunfig.toml .pnpmfile.cjs
+      echo "Lock files and registry configs removed"
     else
       JSX=$(find extracted/ -name "*.jsx" -o -name "*.tsx" | head -1)
       if [ -n "$JSX" ]; then
@@ -222,16 +252,28 @@ function makeSetupBase44Mock(appId: string) {
   return `#!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
-// Remove all @base44/* packages from all dependency sections
+// Remove all @base44/* from all dependency sections + remove problematic scripts
 try {
   const pkg = JSON.parse(fs.readFileSync('package.json','utf8'));
   ['dependencies','devDependencies','peerDependencies','optionalDependencies'].forEach(section => {
     if (pkg[section]) {
-      Object.keys(pkg[section]).filter(k => k.startsWith('@base44/')).forEach(k => delete pkg[section][k]);
+      Object.keys(pkg[section]).filter(k => k.startsWith('@base44/')).forEach(k => {
+        delete pkg[section][k];
+        console.log('Removed', k, 'from', section);
+      });
     }
   });
+  // Remove lifecycle scripts that might hang (postinstall, prepare, preinstall)
+  if (pkg.scripts) {
+    ['postinstall','preinstall','prepare','prepublish','prepublishOnly'].forEach(s => {
+      if (pkg.scripts[s]) {
+        console.log('Removed script:', s, '=', pkg.scripts[s]);
+        delete pkg.scripts[s];
+      }
+    });
+  }
   fs.writeFileSync('package.json', JSON.stringify(pkg,null,2));
-} catch {}
+} catch (e) { console.error('pkg cleanup error:', e.message); }
 // Create mock client
 const mock = \`
 const _store = {};
@@ -273,7 +315,7 @@ export default AuthContext;
     if (fs.existsSync(p)) { fs.writeFileSync(p, authMock); console.log('Replaced',p); }
   });
 });
-// node_modules/@base44/sdk mock
+// node_modules/@base44/sdk mock (prevents runtime import errors)
 fs.mkdirSync('node_modules/@base44/sdk', {recursive:true});
 fs.writeFileSync('node_modules/@base44/sdk/index.js', 'module.exports = {};');
 fs.writeFileSync('node_modules/@base44/sdk/package.json', JSON.stringify({name:'@base44/sdk',version:'0.0.0',main:'index.js',exports:{'.':{require:'./index.js',import:'./index.js'},'./\*':'./'}}));
@@ -449,7 +491,7 @@ Deno.serve(async (req: Request) => {
     const fileBytes = new Uint8Array(await fileRes.arrayBuffer());
     const fileB64 = encodeBase64(fileBytes);
 
-    // 4. Build scripts
+    // 4. Build scripts — workflow uploads directly to Supabase, no artifact download needed
     const scripts: Record<string, string> = {
       'setup.sh':                  makeSetupSh(),
       'setup-pkg.cjs':             makeSetupPkg(),
@@ -460,7 +502,7 @@ Deno.serve(async (req: Request) => {
       'setup-base44-mock.cjs':     makeSetupBase44Mock(app_id ?? ''),
       'setup-env.cjs':             makeSetupEnv(app_id ?? '', webhook_url ?? ''),
       'setup-form-interceptor.cjs':makeSetupFormInterceptor(),
-      '.github/workflows/build.yml': makeWorkflow(),
+      '.github/workflows/build.yml': makeWorkflow(build_id, SUPABASE_URL, SUPABASE_SERVICE_KEY),
     };
 
     // 5. Create blobs in parallel
