@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { base44 } from '@/api/client';
 import { Button } from '@/components/ui/button';
-import { Check, X, Zap, Code2, Sparkles, Info, Menu } from 'lucide-react';
+import { Check, X, Zap, Code2, Sparkles, Menu } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { translations } from '../components/landing/translations';
 import LanguageSwitcher from '../components/landing/LanguageSwitcher';
@@ -29,24 +29,29 @@ export default function Pricing() {
     }, []);
 
     const handlePlanAction = async (planName) => {
-        // Planos pagos: redirecionar direto ao Stripe checkout
+        // Planos pagos: verificar auth antes do Stripe checkout
         if (planName === 'Creator' || planName === 'Pro' || planName === 'Business') {
+            const isAuth = await base44.auth.isAuthenticated().catch(() => false);
+            if (!isAuth) {
+                sessionStorage.setItem('pendingPlan', planName);
+                base44.auth.redirectToLogin(createPageUrl('Pricing'));
+                return;
+            }
             try {
                 const response = await base44.functions.invoke('createPublicCheckoutSession', {
                     plan_name: planName
                 });
-                
-                if (response.data.url) {
+                if (response.data?.url) {
                     window.location.href = response.data.url;
                 } else {
                     alert('Erro ao criar sessão de pagamento. Tente novamente.');
                 }
             } catch (error) {
-                console.error('Erro:', error);
-                alert('Erro ao processar pagamento. Tente novamente.');
+                console.error('Stripe checkout error:', error);
+                alert('Erro ao processar pagamento: ' + (error.message || 'Tente novamente.'));
             }
         } else {
-            // Plano Starter: redirecionar para Compiler
+            // Plano Starter (grátis): redirecionar para Compiler
             try {
                 const isAuth = await base44.auth.isAuthenticated();
                 if (!isAuth) {
@@ -293,15 +298,6 @@ export default function Pricing() {
                                         </div>
                                     ))}
                                 </div>
-
-                                <Button
-                                    onClick={() => setSelectedPlanDetails({ name: planName, ...details })}
-                                    variant="outline"
-                                    className="w-full mb-3"
-                                >
-                                    <Info className="w-4 h-4 mr-2" />
-                                    {t.pricingPage?.learnMore || 'Saiba Mais'}
-                                </Button>
 
                                 <Button
                                     onClick={() => handlePlanAction(planName)}

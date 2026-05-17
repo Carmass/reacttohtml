@@ -115,7 +115,8 @@ export default function Projects() {
 
     const createProjectMutation = useMutation({
         mutationFn: async (projectData) => {
-            const project = await base44.entities.Project.create(projectData);
+            const { selected_builds, ...projectPayload } = projectData;
+            const project = await base44.entities.Project.create(projectPayload);
             
             // Associar builds selecionados ao projeto
             if (projectData.selected_builds && projectData.selected_builds.length > 0) {

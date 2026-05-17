@@ -7,17 +7,20 @@ import { supabase, callEdgeFunction } from '../lib/supabase.js';
 
 // ── Edge Function name mapping (camelCase → kebab-case) ──────────────────────
 const FUNCTION_MAP = {
-  checkDailyLimit:        'check-daily-limit',
-  startToolBuild:         'start-tool-build',
-  pollToolBuild:          'poll-tool-build',
-  downloadCompiledFile:   'download-compiled-file',
-  incrementUsage:         'increment-usage',
-  sendBuildNotification:  'send-build-notification',
-  processReferral:        'process-referral',
-  supportChat:            'support-chat',
-  deployGithub:           'deploy-github',
-  stripeCreateCheckout:   'stripe-create-checkout',
-  createCheckoutSession:  'stripe-create-checkout',
+  checkDailyLimit:            'check-daily-limit',
+  startToolBuild:             'start-tool-build',
+  pollToolBuild:              'poll-tool-build',
+  downloadCompiledFile:       'download-compiled-file',
+  incrementUsage:             'increment-usage',
+  sendBuildNotification:      'send-build-notification',
+  processReferral:            'process-referral',
+  supportChat:                'support-chat',
+  deployGithub:               'deploy-github',
+  deployToFTP:                'deploy-github',
+  testFtpConnection:          'test-ftp-connection',
+  inviteProjectCollaborator:  'invite-project-collaborator',
+  stripeCreateCheckout:       'stripe-create-checkout',
+  createCheckoutSession:      'stripe-create-checkout',
 };
 
 // ── Auth helpers ─────────────────────────────────────────────────────────────
@@ -208,6 +211,49 @@ const functions = {
 
       if (name === 'cancelSubscription') {
         return { data: { message: 'Solicitação de cancelamento registrada. Nossa equipe entrará em contato.' } };
+      }
+
+      if (name === 'inviteProjectCollaborator') {
+        // Verificar se o usuário convidado já existe na plataforma
+        const { data: existingUser } = await supabase
+          .from('profiles')
+          .select('id, name')
+          .eq('id',
+            (await supabase.rpc('get_user_id_by_email', { email: body.collaborator_email }).catch(() => ({ data: null }))).data
+          )
+          .single()
+          .catch(() => ({ data: null }));
+
+        // Notificação in-app para o proprietário do projeto
+        const { data: { session } } = await supabase.auth.getSession();
+        await supabase.from('notifications').insert({
+          user_id: session?.user?.id,
+          title: 'Convite enviado',
+          message: `Convite enviado para ${body.collaborator_email} no projeto "${body.project_name}"`,
+          icon: '📨',
+          type: 'system',
+          status: 'info',
+        }).catch(() => {});
+
+        return { data: { ok: true, user_exists: !!existingUser } };
+      }
+
+      if (name === 'testFtpConnection') {
+        // Edge function ainda não existe — retorno amigável
+        return { data: { ok: false, message: 'Teste de conexão FTP não disponível ainda.' } };
+      }
+
+      if (name === 'createPublicCheckoutSession') {
+        const planName = body.plan_name;
+        const { data: plan } = await supabase.from('plans').select('*').eq('name', planName).single();
+        if (!plan?.stripe_price_id) {
+          throw new Error(`Plano "${planName}" não configurado no Stripe. Adicione o stripe_price_id na tabela plans.`);
+        }
+        const result = await callEdgeFunction('stripe-create-checkout', {
+          price_id: plan.stripe_price_id,
+          plan_name: planName,
+        });
+        return { data: { url: result.url } };
       }
 
       if (name === 'acceptProjectInvite') {
