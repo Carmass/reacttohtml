@@ -28,48 +28,24 @@ export default function Pricing() {
         window.scrollTo({ top: 0, behavior: 'instant' });
     }, []);
 
-    useEffect(() => {
-        const pending = sessionStorage.getItem('pendingPlan');
-        if (pending) {
-            sessionStorage.removeItem('pendingPlan');
-            handlePlanAction(pending);
-        }
-    }, []);
 
     const handlePlanAction = async (planName) => {
-        // Planos pagos: verificar auth antes do Stripe checkout
-        if (planName === 'Creator' || planName === 'Pro' || planName === 'Business') {
-            const isAuth = await base44.auth.isAuthenticated().catch(() => false);
-            if (!isAuth) {
-                sessionStorage.setItem('pendingPlan', planName);
-                base44.auth.redirectToLogin(createPageUrl('Pricing'));
-                return;
+        if (planName === 'Starter') {
+            window.location.href = createPageUrl('Compiler');
+            return;
+        }
+        try {
+            const response = await base44.functions.invoke('createPublicCheckoutSession', {
+                plan_name: planName
+            });
+            if (response.data?.url) {
+                window.location.href = response.data.url;
+            } else {
+                alert('Erro ao criar sessão de pagamento. Tente novamente.');
             }
-            try {
-                const response = await base44.functions.invoke('createPublicCheckoutSession', {
-                    plan_name: planName
-                });
-                if (response.data?.url) {
-                    window.location.href = response.data.url;
-                } else {
-                    alert('Erro ao criar sessão de pagamento. Tente novamente.');
-                }
-            } catch (error) {
-                console.error('Stripe checkout error:', error);
-                alert('Erro ao processar pagamento: ' + (error.message || 'Tente novamente.'));
-            }
-        } else {
-            // Plano Starter (grátis): redirecionar para Compiler
-            try {
-                const isAuth = await base44.auth.isAuthenticated();
-                if (!isAuth) {
-                    base44.auth.redirectToLogin(createPageUrl('Compiler'));
-                } else {
-                    window.location.href = createPageUrl('Compiler');
-                }
-            } catch {
-                base44.auth.redirectToLogin(createPageUrl('Compiler'));
-            }
+        } catch (error) {
+            console.error('Stripe checkout error:', error);
+            alert('Erro ao processar pagamento: ' + (error.message || 'Tente novamente.'));
         }
     };
 

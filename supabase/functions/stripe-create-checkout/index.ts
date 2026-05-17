@@ -19,46 +19,61 @@ Deno.serve(async (req) => {
   try {
     if (!STRIPE_SECRET_KEY) return json({ error: 'Stripe not configured' }, 500);
 
-    const authHeader = req.headers.get('Authorization') ?? '';
-    const { data: { user }, error: authError } = await supabase.auth.getUser(authHeader.replace('Bearer ', ''));
-    if (authError || !user) return json({ error: 'Unauthorized' }, 401);
-
     const { price_id, plan_name } = await req.json();
     if (!price_id) return json({ error: 'price_id required' }, 400);
 
-    // Get or create Stripe customer
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('stripe_customer_id, name')
-      .eq('id', user.id)
-      .single();
+    // Try to get authenticated user — auth is optional for public checkout
+    const authHeader = req.headers.get('Authorization') ?? '';
+    const token = authHeader.replace('Bearer ', '');
+    let customerId: string | undefined;
+    let userId: string | undefined;
 
-    let customerId = profile?.stripe_customer_id;
+    if (token) {
+      const { data: { user } } = await supabase.auth.getUser(token).catch(() => ({ data: { user: null } }));
+      if (user) {
+        userId = user.id;
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('stripe_customer_id, name')
+          .eq('id', user.id)
+          .single();
 
-    if (!customerId) {
-      const custRes = await stripePost('customers', {
-        email: user.email,
-        name: profile?.name ?? '',
-        metadata: { supabase_user_id: user.id },
-      });
-      customerId = custRes.id;
-      await supabase.from('profiles').update({ stripe_customer_id: customerId }).eq('id', user.id);
+        customerId = profile?.stripe_customer_id;
+        if (!customerId) {
+          const custRes = await stripePost('customers', {
+            email: user.email,
+            name: profile?.name ?? '',
+            metadata: { supabase_user_id: user.id },
+          });
+          customerId = custRes.id;
+          await supabase.from('profiles').update({ stripe_customer_id: customerId }).eq('id', user.id);
+        }
+      }
     }
 
-    // Create checkout session
-    const session = await stripePost('checkout/sessions', {
-      customer: customerId,
-      client_reference_id: user.id,
+    // Build checkout session — works with or without a logged-in user
+    const sessionParams: Record<string, unknown> = {
       mode: 'subscription',
       line_items: [{ price: price_id, quantity: 1 }],
       success_url: `${APP_URL}/?checkout=success&plan=${encodeURIComponent(plan_name ?? '')}`,
       cancel_url: `${APP_URL}/Pricing?checkout=cancel`,
       allow_promotion_codes: true,
       subscription_data: {
-        metadata: { supabase_user_id: user.id, plan_name: plan_name ?? '' },
+        metadata: {
+          plan_name: plan_name ?? '',
+          ...(userId ? { supabase_user_id: userId } : {}),
+        },
       },
-    });
+    };
 
+    if (customerId) {
+      sessionParams.customer = customerId;
+    }
+    if (userId) {
+      sessionParams.client_reference_id = userId;
+    }
+
+    const session = await stripePost('checkout/sessions', sessionParams);
     return json({ url: session.url });
   } catch (e) {
     console.error('stripe-create-checkout error:', e);

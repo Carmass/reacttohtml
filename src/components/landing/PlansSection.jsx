@@ -37,33 +37,22 @@ export default function PlansSection({ t }) {
     ];
 
     const handlePlanAction = async (planName) => {
-        if (planName === 'Creator' || planName === 'Pro' || planName === 'Business') {
-            const isAuth = await base44.auth.isAuthenticated().catch(() => false);
-            if (!isAuth) {
-                sessionStorage.setItem('pendingPlan', planName);
-                base44.auth.redirectToLogin(createPageUrl('Pricing'));
-                return;
-            }
-            try {
-                const response = await base44.functions.invoke('createPublicCheckoutSession', {
-                    plan_name: planName
-                });
-                if (response.data?.url) {
-                    window.location.href = response.data.url;
-                } else {
-                    alert('Erro ao criar sessão de pagamento. Tente novamente.');
-                }
-            } catch (error) {
-                console.error('Erro:', error);
-                alert('Erro ao processar pagamento. Tente novamente.');
-            }
-        } else {
-            const isAuth = await base44.auth.isAuthenticated().catch(() => false);
-            if (!isAuth) {
-                base44.auth.redirectToLogin(createPageUrl('Compiler'));
+        if (planName === 'Starter') {
+            window.location.href = createPageUrl('Compiler');
+            return;
+        }
+        try {
+            const response = await base44.functions.invoke('createPublicCheckoutSession', {
+                plan_name: planName
+            });
+            if (response.data?.url) {
+                window.location.href = response.data.url;
             } else {
-                window.location.href = createPageUrl('Compiler');
+                alert('Erro ao criar sessão de pagamento. Tente novamente.');
             }
+        } catch (error) {
+            console.error('Erro:', error);
+            alert('Erro ao processar pagamento. Tente novamente.');
         }
     };
 

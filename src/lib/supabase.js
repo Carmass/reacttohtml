@@ -18,12 +18,14 @@ export const supabase = createClient(
 // Helper: call a Supabase Edge Function (auth header injected automatically)
 export async function callEdgeFunction(name, body = {}) {
   const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token ?? '';
+  // Use user JWT when logged in, anon key as fallback for public calls
+  const token = session?.access_token ?? SUPABASE_ANON_KEY;
   const res = await fetch(`${SUPABASE_URL}/functions/v1/${name}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
+      apikey: SUPABASE_ANON_KEY,
     },
     body: JSON.stringify(body),
   });
