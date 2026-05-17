@@ -1,22 +1,14 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { base44 } from '@/api/client';
 import { Button } from '@/components/ui/button';
-import { Check, Zap, Info } from 'lucide-react';
+import { Check, Zap } from 'lucide-react';
 import { motion } from 'framer-motion';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
 
 export default function PlansSection({ t }) {
     const mostPopularText = t.plans.mostPopular || 'Most Popular';
-    const [selectedPlanInfo, setSelectedPlanInfo] = useState(null);
-    
+
     const plans = [
         {
             name: 'Starter',
@@ -45,14 +37,18 @@ export default function PlansSection({ t }) {
     ];
 
     const handlePlanAction = async (planName) => {
-        // Planos pagos: redirecionar direto ao Stripe checkout
         if (planName === 'Creator' || planName === 'Pro' || planName === 'Business') {
+            const isAuth = await base44.auth.isAuthenticated().catch(() => false);
+            if (!isAuth) {
+                sessionStorage.setItem('pendingPlan', planName);
+                base44.auth.redirectToLogin(createPageUrl('Pricing'));
+                return;
+            }
             try {
                 const response = await base44.functions.invoke('createPublicCheckoutSession', {
                     plan_name: planName
                 });
-                
-                if (response.data.url) {
+                if (response.data?.url) {
                     window.location.href = response.data.url;
                 } else {
                     alert('Erro ao criar sessão de pagamento. Tente novamente.');
@@ -62,16 +58,11 @@ export default function PlansSection({ t }) {
                 alert('Erro ao processar pagamento. Tente novamente.');
             }
         } else {
-            // Plano Starter: redirecionar para Compiler
-            try {
-                const isAuth = await base44.auth.isAuthenticated();
-                if (!isAuth) {
-                    base44.auth.redirectToLogin(createPageUrl('Compiler'));
-                } else {
-                    window.location.href = createPageUrl('Compiler');
-                }
-            } catch {
+            const isAuth = await base44.auth.isAuthenticated().catch(() => false);
+            if (!isAuth) {
                 base44.auth.redirectToLogin(createPageUrl('Compiler'));
+            } else {
+                window.location.href = createPageUrl('Compiler');
             }
         }
     };
@@ -126,16 +117,7 @@ export default function PlansSection({ t }) {
                                 <div className="text-gray-600">{t.plans.daily}</div>
                             </div>
 
-                            <Button
-                                onClick={() => setSelectedPlanInfo({ name: plan.name, ...plan.info })}
-                                variant="outline"
-                                className="w-full mb-2"
-                            >
-                                <Info className="w-4 h-4 mr-2" />
-                                {t.pricingPage?.learnMore || 'Saiba Mais'}
-                            </Button>
-
-                            <button 
+                            <button
                                 onClick={() => handlePlanAction(plan.name)}
                                 className={`w-full h-10 px-4 rounded-md font-medium text-sm transition-all duration-200 ${
                                     plan.popular 
@@ -185,57 +167,6 @@ export default function PlansSection({ t }) {
                 </motion.div>
             </div>
 
-            {/* Plan Info Dialog */}
-            <Dialog open={!!selectedPlanInfo} onOpenChange={() => setSelectedPlanInfo(null)}>
-                <DialogContent className="max-w-xl max-h-[80vh] overflow-y-auto">
-                    {selectedPlanInfo && (
-                        <>
-                            <DialogHeader>
-                                <DialogTitle className="text-2xl font-bold">{selectedPlanInfo.name}</DialogTitle>
-                                <DialogDescription className="text-base">
-                                    {selectedPlanInfo.description}
-                                </DialogDescription>
-                            </DialogHeader>
-                            
-                            <div className="space-y-4">
-                                {selectedPlanInfo.features && (
-                                    <div>
-                                        <h3 className="font-bold text-lg mb-3 flex items-center gap-2">
-                                            <Check className="w-5 h-5 text-green-500" />
-                                            {t.pricingPage?.included || 'Incluído'}
-                                        </h3>
-                                        <ul className="space-y-2">
-                                            {selectedPlanInfo.features.map((feature, idx) => (
-                                                <li key={idx} className="flex items-start gap-2">
-                                                    <Check className="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
-                                                    <span className="text-sm text-gray-700">{feature}</span>
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    </div>
-                                )}
-
-                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                                    <p className="text-blue-900 text-sm font-semibold">
-                                        {selectedPlanInfo.idealFor}
-                                    </p>
-                                </div>
-
-                                <Button
-                                    onClick={() => {
-                                        const planName = selectedPlanInfo.name;
-                                        setSelectedPlanInfo(null);
-                                        handlePlanAction(planName);
-                                    }}
-                                    className="w-full bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700"
-                                >
-                                    {t.plans.getStarted}
-                                </Button>
-                            </div>
-                        </>
-                    )}
-                </DialogContent>
-            </Dialog>
         </section>
     );
 }

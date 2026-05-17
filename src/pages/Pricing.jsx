@@ -28,6 +28,14 @@ export default function Pricing() {
         window.scrollTo({ top: 0, behavior: 'instant' });
     }, []);
 
+    useEffect(() => {
+        const pending = sessionStorage.getItem('pendingPlan');
+        if (pending) {
+            sessionStorage.removeItem('pendingPlan');
+            handlePlanAction(pending);
+        }
+    }, []);
+
     const handlePlanAction = async (planName) => {
         // Planos pagos: verificar auth antes do Stripe checkout
         if (planName === 'Creator' || planName === 'Pro' || planName === 'Business') {
