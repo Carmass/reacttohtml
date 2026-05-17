@@ -6,10 +6,10 @@ import { base44 } from '@/api/client';
 
 const PLANS_INFO = `
 PLANOS DISPONÍVEIS:
-1. STARTER: 3 compilações diárias - R$ 9,90/mês
-2. CREATOR: 10 compilações diárias - R$ 29,90/mês (MAIS POPULAR)
-3. PRO: 50 compilações diárias - R$ 79,90/mês
-4. BUSINESS: 100 compilações diárias - R$ 199,90/mês
+1. STARTER: 3 compilações diárias - GRATUITO
+2. CREATOR: 10 compilações diárias - $3.99/mês (MAIS POPULAR)
+3. PRO: 50 compilações diárias - $9.99/mês
+4. BUSINESS: 100 compilações diárias - $14.99/mês
 
 RECURSOS:
 - Suporte por email em todos os planos

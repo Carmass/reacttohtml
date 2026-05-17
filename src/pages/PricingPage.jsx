@@ -56,10 +56,10 @@ export default function PricingPage({ go }) {
   ];
 
   const PLANS = [
-    { name: 'Starter',  price: '$0',  period: '',            builds: '3',   highlight: false, badge: null,          key: 'starter' },
-    { name: 'Creator',  price: '$9',  period: t.plansPeriod, builds: '10',  highlight: true,  badge: t.plansBadge,  key: 'creator' },
-    { name: 'Pro',      price: '$29', period: t.plansPeriod, builds: '50',  highlight: false, badge: null,          key: 'pro' },
-    { name: 'Business', price: '$79', period: t.plansPeriod, builds: '100', highlight: false, badge: null,          key: 'business' },
+    { name: 'Starter',  price: '$0',     period: '',            builds: '3',   highlight: false, badge: null,         key: 'starter' },
+    { name: 'Creator',  price: '$3.99',  period: t.plansPeriod, builds: '10',  highlight: true,  badge: t.plansBadge, key: 'creator' },
+    { name: 'Pro',      price: '$9.99',  period: t.plansPeriod, builds: '50',  highlight: false, badge: null,         key: 'pro' },
+    { name: 'Business', price: '$14.99', period: t.plansPeriod, builds: '100', highlight: false, badge: null,         key: 'business' },
   ];
 
   const tableRows = (t.pricingTableRows || []).map((row, i) => ({

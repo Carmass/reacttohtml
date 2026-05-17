@@ -218,10 +218,10 @@ export default function LandingPage({ go }) {
   const navIds = ['recursos', 'como-funciona', null, 'faq'];
 
   const PLANS = [
-    { name: 'Starter',  price: '$0',  period: '',              builds: '3',   highlight: false, badge: null },
-    { name: 'Creator',  price: '$9',  period: t.plansPeriod,   builds: '10',  highlight: true,  badge: t.plansBadge },
-    { name: 'Pro',      price: '$29', period: t.plansPeriod,   builds: '50',  highlight: false, badge: null },
-    { name: 'Business', price: '$79', period: t.plansPeriod,   builds: '100', highlight: false, badge: null },
+    { name: 'Starter',  price: '$0',     period: '',            builds: '3',   highlight: false, badge: null },
+    { name: 'Creator',  price: '$3.99',  period: t.plansPeriod, builds: '10',  highlight: true,  badge: t.plansBadge },
+    { name: 'Pro',      price: '$9.99',  period: t.plansPeriod, builds: '50',  highlight: false, badge: null },
+    { name: 'Business', price: '$14.99', period: t.plansPeriod, builds: '100', highlight: false, badge: null },
   ];
 
   return (

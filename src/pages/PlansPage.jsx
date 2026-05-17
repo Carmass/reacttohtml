@@ -3,7 +3,7 @@ import { C } from '../lib/tokens.js';
 import { usePlans, useAuth } from '../hooks/useDB.js';
 import { callEdgeFunction } from '../lib/supabase.js';
 
-const PLAN_ICONS = { Free: '🆓', Starter: '🚀', Pro: '⚡', Business: '💎' };
+const PLAN_ICONS = { Starter: '🆓', Creator: '🚀', Pro: '⚡', Business: '💎' };
 const PLAN_COLORS = { Free: C.s2, Starter: C.pC, Pro: C.secC, Business: C.terC };
 
 export default function PlansPage({ showToast }) {
@@ -41,10 +41,10 @@ export default function PlansPage({ showToast }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
         {plans.length === 0
           ? [
-            { name: 'Free', price: 0, daily_limit: 3, features: ['3 compilações/dia', 'Download ZIP', 'Suporte comunidade'] },
-            { name: 'Starter', price: 9, daily_limit: 10, features: ['10 compilações/dia', 'Projetos salvos', 'E-mail de notificação'] },
-            { name: 'Pro', price: 29, daily_limit: 50, features: ['50 compilações/dia', 'Deploy automático', 'GitHub Pages', 'FTP/SFTP'] },
-            { name: 'Business', price: 79, daily_limit: -1, features: ['Compilações ilimitadas', 'Deploy em lote', 'Suporte prioritário', 'API access'] },
+            { name: 'Starter',  price: 0,     daily_limit: 3,   stripe_price_id: 'price_1T1Tw4EtmRP7yowIz8B9nLGk', features: ['3 compilações/dia', 'Download ZIP', 'Suporte comunidade'] },
+            { name: 'Creator',  price: 3.99,  daily_limit: 10,  stripe_price_id: 'price_1T1TxxEtmRP7yowIn1Aiturg', features: ['10 compilações/dia', 'Projetos salvos', 'Deploy FTP/SFTP'] },
+            { name: 'Pro',      price: 9.99,  daily_limit: 50,  stripe_price_id: 'price_1T1TyjEtmRP7yowIajN9pvrI', features: ['50 compilações/dia', 'Deploy automático', 'GitHub Pages', 'FTP/SFTP'] },
+            { name: 'Business', price: 14.99, daily_limit: 100, stripe_price_id: 'price_1T1TzQEtmRP7yowIY91nCR66', features: ['100 compilações/dia', 'Suporte 24/7', 'SLA garantido', 'API access'] },
           ].map(p => <PlanCard key={p.name} plan={p} current={currentPlan} onSubscribe={handleSubscribe} loading={loadingPlan === p.name} />)
           : plans.map(p => <PlanCard key={p.name} plan={p} current={currentPlan} onSubscribe={handleSubscribe} loading={loadingPlan === p.name} />)
         }

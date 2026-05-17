@@ -67,6 +67,8 @@ export default function Pricing() {
 
     const planDetails = {
         Starter: {
+            price: '$0',
+            period: '',
             compilations: '3',
             description: t.pricingPage?.starter?.description || 'Perfeito para começar e testar a plataforma sem compromisso.',
             features: t.pricingPage?.starter?.features || [
@@ -83,6 +85,8 @@ export default function Pricing() {
             idealFor: t.pricingPage?.starter?.idealFor || 'Ideal para: Testes, projetos pequenos, desenvolvedores iniciantes'
         },
         Creator: {
+            price: '$3.99',
+            period: '/mês',
             compilations: '10',
             description: t.pricingPage?.creator?.description || 'Plano mais popular! Ideal para freelancers e pequenos projetos.',
             features: t.pricingPage?.creator?.features || [
@@ -100,6 +104,8 @@ export default function Pricing() {
             idealFor: t.pricingPage?.creator?.idealFor || 'Ideal para: Freelancers, agências pequenas, projetos pessoais'
         },
         Pro: {
+            price: '$9.99',
+            period: '/mês',
             compilations: '50',
             description: t.pricingPage?.pro?.description || 'Para profissionais que precisam de mais volume e recursos avançados.',
             features: t.pricingPage?.pro?.features || [
@@ -116,6 +122,8 @@ export default function Pricing() {
             idealFor: t.pricingPage?.pro?.idealFor || 'Ideal para: Desenvolvedores profissionais, agências médias, SaaS'
         },
         Business: {
+            price: '$14.99',
+            period: '/mês',
             compilations: '100',
             description: t.pricingPage?.business?.description || 'Máximo poder para empresas e times que precisam de alta demanda.',
             features: t.pricingPage?.business?.features || [
@@ -284,10 +292,14 @@ export default function Pricing() {
 
                                 <div className="text-center mb-6">
                                     <h3 className="text-2xl font-bold text-gray-900 mb-2">{planName}</h3>
-                                    <div className="text-5xl font-bold text-gray-900 mb-1">
+                                    <div className="flex items-baseline justify-center gap-1 mb-1">
+                                        <span className="text-4xl font-black text-violet-600">{details.price}</span>
+                                        {details.period && <span className="text-sm text-gray-500">{details.period}</span>}
+                                    </div>
+                                    <div className="text-3xl font-bold text-gray-800 mb-1">
                                         {details.compilations}
                                     </div>
-                                    <div className="text-gray-600">{t.plans?.daily || 'compilações diárias'}</div>
+                                    <div className="text-gray-600 text-sm">{t.plans?.daily || 'compilações diárias'}</div>
                                 </div>
 
                                 <div className="space-y-3 mb-6">
